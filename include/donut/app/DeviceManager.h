@@ -65,6 +65,10 @@ freely, subject to the following restrictions:
 #include <nvrhi/vulkan.h>
 #endif
 
+#if DONUT_WITH_METAL
+#include <nvrhi/metal.h>
+#endif
+
 #if DONUT_WITH_AFTERMATH
 #include "AftermathCrashDump.h"
 #endif
@@ -433,6 +437,9 @@ namespace donut::app
         static DeviceManager* CreateD3D11();
         static DeviceManager* CreateD3D12();
         static DeviceManager* CreateVK();
+#if DONUT_WITH_METAL
+        static DeviceManager* CreateMTL();
+#endif
 
         std::string m_WindowTitle;
 #if DONUT_WITH_AFTERMATH

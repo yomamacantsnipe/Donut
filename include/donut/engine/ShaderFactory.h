@@ -76,11 +76,17 @@ namespace donut::engine
     #define DONUT_MAKE_SPIRV_SHADER(symbol) donut::engine::StaticShader()
     #endif
 
+    #if DONUT_WITH_METAL && DONUT_WITH_STATIC_SHADERS
+    #define DONUT_MAKE_MSL_SHADER(symbol) donut::engine::StaticShader{symbol,sizeof(symbol)}
+    #else
+    #define DONUT_MAKE_MSL_SHADER(symbol) donut::engine::StaticShader()
+    #endif
+
     // Macro to use with ShaderFactory::CreateStaticPlatformShader.
-    // If there are symbols g_MyShader_dxbc, g_MyShader_dxil, g_MyShader_spirv - just use:
+    // If there are symbols g_MyShader_dxbc, g_MyShader_dxil, g_MyShader_spirv, g_MyShader_msl - just use:
     //      CreateStaticPlatformShader(DONUT_MAKE_PLATFORM_SHADER(g_MyShader), defines, shaderDesc);
     // and all available platforms will be resolved automatically.
-    #define DONUT_MAKE_PLATFORM_SHADER(basename) DONUT_MAKE_DXBC_SHADER(basename##_dxbc), DONUT_MAKE_DXIL_SHADER(basename##_dxil), DONUT_MAKE_SPIRV_SHADER(basename##_spirv)
+    #define DONUT_MAKE_PLATFORM_SHADER(basename) DONUT_MAKE_DXBC_SHADER(basename##_dxbc), DONUT_MAKE_DXIL_SHADER(basename##_dxil), DONUT_MAKE_SPIRV_SHADER(basename##_spirv), DONUT_MAKE_MSL_SHADER(basename##_msl)
 
     // Similar to DONUT_MAKE_PLATFORM_SHADER but for libraries - they are not available on DX11/DXBC.
     //      CreateStaticPlatformShaderLibrary(DONUT_MAKE_PLATFORM_SHADER_LIBRARY(g_MyShaderLibrary), defines);
@@ -127,6 +133,12 @@ namespace donut::engine
         // A version of CreateStaticPlatformShader that takes a ShaderType instead of a full ShaderDesc.
         nvrhi::ShaderHandle CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType);
 
+        // Creates a shader from platform-specific bytecode arrays including MSL for Metal.
+        nvrhi::ShaderHandle CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, const nvrhi::ShaderDesc& desc);
+
+        // A version of CreateStaticPlatformShader with MSL that takes a ShaderType.
+        nvrhi::ShaderHandle CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType);
+
         // Creates a shader library from the bytecode array.
         nvrhi::ShaderLibraryHandle CreateStaticShaderLibrary(StaticShader shader, const std::vector<ShaderMacro>* pDefines);
 
@@ -139,6 +151,12 @@ namespace donut::engine
 
         // A versoin of CreateAutoShader that takes a ShaderType instead of a full ShaderDesc.
         nvrhi::ShaderHandle CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType);
+
+        // Tries to create a shader from platform-specific bytecode arrays including MSL for Metal.
+        nvrhi::ShaderHandle CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, const nvrhi::ShaderDesc& desc);
+
+        // A version of CreateAutoShader with MSL that takes a ShaderType.
+        nvrhi::ShaderHandle CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType);
 
         // Tries to create a shader library from one of the platform-specific bytecode arrays (calling CreateStaticPlatformShaderLibrary).
         // If that fails (e.g. there is no static bytecode), creates a shader library from the filesystem binary file (calling CreateShaderLibrary).

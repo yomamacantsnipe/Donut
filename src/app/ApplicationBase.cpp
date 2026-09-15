@@ -33,6 +33,9 @@
 #include <unistd.h>
 #include <cstdio>
 #include <climits>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #else
 #define PATH_MAX MAX_PATH
 #endif // _WIN32
@@ -164,6 +167,8 @@ const char* donut::app::GetShaderTypeName(nvrhi::GraphicsAPI api)
         return "dxil";
     case nvrhi::GraphicsAPI::VULKAN:
         return "spirv";
+    case nvrhi::GraphicsAPI::METAL:
+        return "msl";
     default:
         assert(!"Unknown graphics API");
         return "";
@@ -234,6 +239,11 @@ std::filesystem::path donut::app::GetDirectoryWithExecutable()
 #ifdef _WIN32
     if (GetModuleFileNameA(nullptr, path, dim(path)) == 0)
         return "";
+#elif defined(__APPLE__)
+    // /proc/self/exe doesn't exist on macOS; use the dyld API instead
+    uint32_t pathSize = std::size(path);
+    if (_NSGetExecutablePath(path, &pathSize) != 0)
+        return ""; // failure
 #else // _WIN32
 	// /proc/self/exe is mostly linux-only, but can't hurt to try it elsewhere
 	if (readlink("/proc/self/exe", path, std::size(path)) <= 0)

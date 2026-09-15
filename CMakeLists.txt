@@ -54,6 +54,7 @@ option(DONUT_WITH_NVRHI "Enable NVRHI and related projects" ON)
 cmake_dependent_option(DONUT_WITH_DX11 "Enable the DX11 version of Donut" ON "WIN32" OFF)
 cmake_dependent_option(DONUT_WITH_DX12 "Enable the DX12 version of Donut" ON "WIN32" OFF)
 option(DONUT_WITH_VULKAN "Enable the Vulkan version of Donut" ON)
+option(DONUT_WITH_METAL "Enable the Metal version of Donut" ON)
 option(DONUT_WITH_AFTERMATH "Enable Aftermath crash dump generation with Donut" OFF)
 option(DONUT_EMBED_SHADER_PDBS "Embed shader PDBs with shader binary files" OFF)
 
@@ -103,9 +104,18 @@ if (DONUT_WITH_NVRHI)
     set(NVRHI_WITH_DX11 "${DONUT_WITH_DX11}" CACHE BOOL "" FORCE)
     set(NVRHI_WITH_DX12 "${DONUT_WITH_DX12}" CACHE BOOL "" FORCE)
     set(NVRHI_WITH_VULKAN "${DONUT_WITH_VULKAN}" CACHE BOOL "" FORCE)
+    set(NVRHI_WITH_METAL "${DONUT_WITH_METAL}" CACHE BOOL "" FORCE)
     set(NVRHI_WITH_AFTERMATH "${DONUT_WITH_AFTERMATH}" CACHE BOOL "" FORCE)
 
-    add_subdirectory(nvrhi)
+    # Prefer the NVRHI checkout in the parent directory; fall back to the submodule path
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../include/nvrhi/nvrhi.h")
+        set(NVRHI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." CACHE PATH "Path to the NVRHI source tree")
+    else()
+        set(NVRHI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/nvrhi" CACHE PATH "Path to the NVRHI source tree")
+    endif()
+    message(STATUS "Using NVRHI from: ${NVRHI_SOURCE_DIR}")
+
+    add_subdirectory(${NVRHI_SOURCE_DIR} nvrhi)
 
     set(DONUT_SHADER_INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/include CACHE PATH "" FORCE)
     

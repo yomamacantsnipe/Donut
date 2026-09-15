@@ -69,6 +69,10 @@ freely, subject to the following restrictions:
 #include <StreamlineIntegration.h>
 #endif
 
+#if DONUT_WITH_METAL
+#include <donut/app/DeviceManager_MTL.h>
+#endif
+
 #ifdef _WINDOWS
 #include <ShellScalingApi.h>
 #pragma comment(lib, "shcore.lib")
@@ -299,7 +303,7 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
     m_DeviceParams.headlessDevice = false;
     m_RequestedVSync = m_DeviceParams.vsyncEnabled;
 
-#ifndef _WINDOWS
+#if !defined(_WINDOWS) && !defined(__APPLE__)
     // This is necessary to get correct window decorations on Wayland
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
 #endif
@@ -1171,6 +1175,10 @@ donut::app::DeviceManager* donut::app::DeviceManager::Create(nvrhi::GraphicsAPI 
 #if DONUT_WITH_VULKAN
     case nvrhi::GraphicsAPI::VULKAN:
         return CreateVK();
+#endif
+#if DONUT_WITH_METAL
+    case nvrhi::GraphicsAPI::METAL:
+        return CreateMTL();
 #endif
     default:
         log::error("DeviceManager::Create: Unsupported Graphics API (%d)", api);

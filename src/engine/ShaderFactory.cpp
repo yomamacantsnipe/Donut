@@ -169,6 +169,9 @@ nvrhi::ShaderHandle ShaderFactory::CreateStaticPlatformShader(StaticShader dxbc,
         case nvrhi::GraphicsAPI::VULKAN:
             shader = spirv;
             break;
+        case nvrhi::GraphicsAPI::METAL:
+            shader = StaticShader{}; // MSL is handled via CreateAutoShader from file
+            break;
     }
 
     return CreateStaticShader(shader, pDefines, desc);
@@ -177,6 +180,36 @@ nvrhi::ShaderHandle ShaderFactory::CreateStaticPlatformShader(StaticShader dxbc,
 nvrhi::ShaderHandle ShaderFactory::CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType)
 {
     return CreateStaticPlatformShader(dxbc, dxil, spirv, pDefines, nvrhi::ShaderDesc().setShaderType(shaderType));
+}
+
+nvrhi::ShaderHandle ShaderFactory::CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, const nvrhi::ShaderDesc& desc)
+{
+    StaticShader shader;
+    switch(m_Device->getGraphicsAPI())
+    {
+        case nvrhi::GraphicsAPI::D3D11:
+            shader = dxbc;
+            break;
+        case nvrhi::GraphicsAPI::D3D12:
+            shader = dxil;
+            break;
+        case nvrhi::GraphicsAPI::VULKAN:
+            shader = spirv;
+            break;
+        case nvrhi::GraphicsAPI::METAL:
+            shader = msl;
+            break;
+        default:
+            shader = StaticShader{};
+            break;
+    }
+
+    return CreateStaticShader(shader, pDefines, desc);
+}
+
+nvrhi::ShaderHandle ShaderFactory::CreateStaticPlatformShader(StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType)
+{
+    return CreateStaticPlatformShader(dxbc, dxil, spirv, msl, pDefines, nvrhi::ShaderDesc().setShaderType(shaderType));
 }
 
 nvrhi::ShaderLibraryHandle ShaderFactory::CreateStaticShaderLibrary(StaticShader shader, const std::vector<ShaderMacro>* pDefines)
@@ -239,6 +272,25 @@ nvrhi::ShaderHandle ShaderFactory::CreateAutoShader(const char* fileName, const 
 nvrhi::ShaderHandle ShaderFactory::CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType)
 {
     return CreateAutoShader(fileName, entryName, dxbc, dxil, spirv, pDefines, nvrhi::ShaderDesc().setShaderType(shaderType));
+}
+
+nvrhi::ShaderHandle ShaderFactory::CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, const nvrhi::ShaderDesc& desc)
+{
+    nvrhi::ShaderDesc descCopy = desc;
+    descCopy.entryName = entryName;
+    if (descCopy.debugName.empty())
+        descCopy.debugName = fileName;
+
+    nvrhi::ShaderHandle shader = CreateStaticPlatformShader(dxbc, dxil, spirv, msl, pDefines, descCopy);
+    if (shader)
+        return shader;
+
+    return CreateShader(fileName, entryName, pDefines, desc);
+}
+
+nvrhi::ShaderHandle ShaderFactory::CreateAutoShader(const char* fileName, const char* entryName, StaticShader dxbc, StaticShader dxil, StaticShader spirv, StaticShader msl, const std::vector<ShaderMacro>* pDefines, nvrhi::ShaderType shaderType)
+{
+    return CreateAutoShader(fileName, entryName, dxbc, dxil, spirv, msl, pDefines, nvrhi::ShaderDesc().setShaderType(shaderType));
 }
 
 nvrhi::ShaderLibraryHandle ShaderFactory::CreateAutoShaderLibrary(const char* fileName, StaticShader dxil, StaticShader spirv, const std::vector<ShaderMacro>* pDefines)

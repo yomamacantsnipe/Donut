@@ -37,7 +37,9 @@ add_library(donut_core STATIC EXCLUDE_FROM_ALL ${donut_core_src})
 target_include_directories(donut_core PUBLIC include)
 target_link_libraries(donut_core jsoncpp_static)
 
-if(NOT WIN32)
+if(APPLE)
+    target_link_libraries(donut_core dl pthread)
+elseif(NOT WIN32)
     target_link_libraries(donut_core stdc++fs dl pthread)
 endif()
 

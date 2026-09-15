@@ -56,6 +56,7 @@ function(donut_compile_shaders)
         SHADERMAKE_OPTIONS_DXBC
         SHADERMAKE_OPTIONS_DXIL
         SHADERMAKE_OPTIONS_SPIRV
+        SHADERMAKE_OPTIONS_MSL
         COMPILER_OPTIONS        # deprecated
         COMPILER_OPTIONS_DXBC   # deprecated
         COMPILER_OPTIONS_DXIL   # deprecated
@@ -70,6 +71,7 @@ function(donut_compile_shaders)
         PROJECT_NAME
         SPIRV_DXC
         SPIRV_SLANG
+        MSL
         VULKAN_VERSION
         TARGET)
     set(multiValueArgs
@@ -323,6 +325,75 @@ function(donut_compile_shaders)
         endif()
     endif()
 
+    # MSL (Metal Shading Language) compilation via spirv-cross
+    # Pipeline: HLSL -> SPIRV (via DXC/Slang) -> MSL (via spirv-cross)
+    if (params_MSL AND DONUT_WITH_METAL AND APPLE)
+        if (NOT EXISTS "${SHADERMAKE_DXC_VK_PATH}")
+            message(FATAL_ERROR "donut_compile_shaders: DXC not found for MSL compilation -- please set SHADERMAKE_DXC_VK_PATH")
+        endif()
+        
+        # Find spirv-cross
+        find_program(SPIRV_CROSS_PATH spirv-cross)
+        if (NOT SPIRV_CROSS_PATH)
+            message(STATUS "donut_compile_shaders: spirv-cross not found, skipping MSL compilation")
+            set(params_MSL "")
+        else()
+            set(spirv_intermediate "${CMAKE_CURRENT_BINARY_DIR}/${params_TARGET}_spirv_temp")
+            file(MAKE_DIRECTORY ${spirv_intermediate})
+
+            # Step 1: Compile HLSL -> SPIRV (DXC)
+            set(compilerCommandDXC ${SHADERMAKE_PATH}
+               --config ${params_CONFIG}
+               --out ${spirv_intermediate}
+               --platform SPIRV
+               --binary
+               ${include_dirs}
+               ${ignore_includes}
+               -D SPIRV
+               -D TARGET_METAL
+               --compiler "${SHADERMAKE_DXC_VK_PATH}"
+               ${NVRHI_DEFAULT_VK_REGISTER_OFFSETS}
+               --vulkanVersion ${VULKAN_VERSION}
+               --shaderModel ${params_SHADER_MODEL})
+
+            list(APPEND compilerCommandDXC ${params_SHADERMAKE_OPTIONS})
+            list(APPEND compilerCommandDXC ${params_SHADERMAKE_OPTIONS_SPIRV})
+
+            add_custom_command(TARGET ${params_TARGET} PRE_BUILD
+                COMMAND ${compilerCommandDXC}
+                COMMENT "Compiling shaders to SPIRV for Metal (${params_PROJECT_NAME})")
+
+            # Step 2: Convert SPIRV -> MSL using spirv-cross
+            set(msl_output_dir ${params_MSL})
+            file(MAKE_DIRECTORY ${msl_output_dir})
+
+            # Create a custom command to convert all SPIRV files to MSL
+            file(GLOB spirv_files "${spirv_intermediate}/*.spv")
+            
+            if (spirv_files)
+                set(msl_byproducts_with_paths "")
+                foreach(spirv_file IN LISTS spirv_files)
+                    get_filename_component(spirv_name ${spirv_file} NAME_WE)
+                    set(msl_output "${msl_output_dir}/${spirv_name}.metal")
+                    list(APPEND msl_byproducts_with_paths ${msl_output})
+                    
+                    add_custom_command(TARGET ${params_TARGET} PRE_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${msl_output_dir}
+                        COMMAND ${SPIRV_CROSS_PATH} --msl --output ${msl_output} ${spirv_file}
+                        ${params_SHADERMAKE_OPTIONS_MSL}
+                        DEPENDS ${spirv_file}
+                        COMMENT "Converting ${spirv_name} to MSL for Metal"
+                        )
+                endforeach()
+            else()
+                # If no SPIRV files found yet, add a fallback command
+                add_custom_command(TARGET ${params_TARGET} PRE_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E echo "No SPIRV files found for MSL conversion (will compile in next pass)"
+                    COMMENT "MSL: waiting for SPIRV compilation")
+            endif()
+        endif()
+    endif()
+
     if(params_FOLDER)
         set_target_properties(${params_TARGET} PROPERTIES FOLDER ${params_FOLDER})
     endif()
@@ -370,6 +441,7 @@ function(donut_compile_shaders_all_platforms)
         SHADERMAKE_OPTIONS_DXBC
         SHADERMAKE_OPTIONS_DXIL
         SHADERMAKE_OPTIONS_SPIRV
+        SHADERMAKE_OPTIONS_MSL
         SHADER_MODEL
         COMPILER_OPTIONS        # deprecated
         COMPILER_OPTIONS_DXBC   # deprecated
@@ -410,15 +482,17 @@ function(donut_compile_shaders_all_platforms)
 
     if ("${params_OUTPUT_FORMAT}" STREQUAL "HEADER")
         # Header/static compilation puts everything into one location and differentiates between platforms
-        # using the .dxbc.h, .dxil.h, or .spirv.h extensions native to ${SHADERMAKE_PATH}
+        # using the .dxbc.h, .dxil.h, .spirv.h, .msl.h extensions native to ${SHADERMAKE_PATH}
         set(output_dxbc ${params_OUTPUT_BASE})
         set(output_dxil ${params_OUTPUT_BASE})
         set(output_spirv ${params_OUTPUT_BASE})
+        set(output_msl ${params_OUTPUT_BASE})
     else()
         # Binary compilation puts shaders into per-platform folders - legacy mode compatible with various apps
         set(output_dxbc ${params_OUTPUT_BASE}/dxbc)
         set(output_dxil ${params_OUTPUT_BASE}/dxil)
         set(output_spirv ${params_OUTPUT_BASE}/spirv)
+        set(output_msl ${params_OUTPUT_BASE}/msl)
     endif()
 
     set(byproducts_dxbc "")
@@ -436,11 +510,13 @@ function(donut_compile_shaders_all_platforms)
             FOLDER ${params_FOLDER}
             DXIL_SLANG ${output_dxil}
             SPIRV_SLANG ${output_spirv}
+            MSL ${output_msl}
             OUTPUT_FORMAT ${params_OUTPUT_FORMAT}
             PROJECT_NAME ${params_PROJECT_NAME}
             SHADERMAKE_OPTIONS ${params_SHADERMAKE_OPTIONS}
             SHADERMAKE_OPTIONS_DXIL ${params_SHADERMAKE_OPTIONS_DXIL}
             SHADERMAKE_OPTIONS_SPIRV ${params_SHADERMAKE_OPTIONS_SPIRV}
+            SHADERMAKE_OPTIONS_MSL ${params_SHADERMAKE_OPTIONS_MSL}
             SHADER_MODEL ${params_SHADER_MODEL}
             SOURCES ${params_SOURCES}
             INCLUDES ${params_INCLUDES}
@@ -454,12 +530,14 @@ function(donut_compile_shaders_all_platforms)
             DXBC ${output_dxbc}
             DXIL ${output_dxil}
             SPIRV_DXC ${output_spirv}
+            MSL ${output_msl}
             OUTPUT_FORMAT ${params_OUTPUT_FORMAT}
             PROJECT_NAME ${params_PROJECT_NAME}
             SHADERMAKE_OPTIONS ${params_SHADERMAKE_OPTIONS}
             SHADERMAKE_OPTIONS_DXIL ${params_SHADERMAKE_OPTIONS_DXIL}
             SHADERMAKE_OPTIONS_DXBC ${params_SHADERMAKE_OPTIONS_DXBC}
             SHADERMAKE_OPTIONS_SPIRV ${params_SHADERMAKE_OPTIONS_SPIRV}
+            SHADERMAKE_OPTIONS_MSL ${params_SHADERMAKE_OPTIONS_MSL}
             SHADER_MODEL ${params_SHADER_MODEL}
             SOURCES ${params_SOURCES}
             INCLUDES ${params_INCLUDES}
