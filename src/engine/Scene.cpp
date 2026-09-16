@@ -925,10 +925,11 @@ void Scene::CreateMeshBuffers(nvrhi::ICommandList* commandList)
                     buffers->radiusData.size() * sizeof(buffers->radiusData[0]), bufferByteSize);
             }
 
-            if (bufferDesc.byteSize == 0)
+            if (bufferByteSize == 0)
             {
 	            continue;
             }
+            bufferDesc.byteSize = bufferByteSize;
 
             buffers->vertexBuffer = m_Device->createBuffer(bufferDesc);
             if (m_DescriptorTable)
