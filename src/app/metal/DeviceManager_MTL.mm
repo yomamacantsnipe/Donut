@@ -137,6 +137,10 @@ void DeviceManager_MTL::destroySwapChain()
         img.pTexture = nullptr;
     }
     m_SwapChainImages.clear();
+    m_SwapChainIndex = 0;
+    m_NextSwapChainSlot = 0;
+    m_SwapChainWidth = 0;
+    m_SwapChainHeight = 0;
 
     if (m_pCurrentDrawable)
     {
@@ -214,6 +218,27 @@ bool DeviceManager_MTL::BeginFrame()
     {
         CAMetalLayer* pLayer = (__bridge CAMetalLayer*)m_pMetalLayer;
 
+        // A zero-sized drawable (window not laid out yet, occluded, or minimized)
+        // must not reach nvrhi: the swapchain texture desc and any dependent
+        // render targets would be created with zero extents, which Metal rejects.
+        CGSize drawableSize = [pLayer drawableSize];
+        if (drawableSize.width < 1.0 || drawableSize.height < 1.0)
+            return false;
+
+        // On resize (or contentsScale change), invalidate the cached nvrhi
+        // handles so they are recreated with the current drawable size.
+        if (uint32_t(drawableSize.width) != m_SwapChainWidth ||
+            uint32_t(drawableSize.height) != m_SwapChainHeight)
+        {
+            for (auto& img : m_SwapChainImages)
+            {
+                img.rhiHandle = nullptr;
+                img.pTexture = nullptr;
+            }
+            m_SwapChainWidth = uint32_t(drawableSize.width);
+            m_SwapChainHeight = uint32_t(drawableSize.height);
+        }
+
         // nextDrawable blocks until one is available (frame pacing)
         id<CAMetalDrawable> drawable = [pLayer nextDrawable];
         if (!drawable)
@@ -229,7 +254,7 @@ bool DeviceManager_MTL::BeginFrame()
         uint32_t slot = UINT32_MAX;
         for (uint32_t i = 0; i < m_SwapChainImages.size(); i++)
         {
-            if (m_SwapChainImages[i].pTexture == pTex)
+            if (m_SwapChainImages[i].pTexture == pTex && m_SwapChainImages[i].rhiHandle)
             {
                 slot = i;
                 break;
@@ -238,13 +263,13 @@ bool DeviceManager_MTL::BeginFrame()
         if (slot == UINT32_MAX)
         {
             // Round-robin replacement
-            slot = m_SwapChainIndex;
+            slot = m_NextSwapChainSlot;
+            m_NextSwapChainSlot = (m_NextSwapChainSlot + 1) % uint32_t(m_SwapChainImages.size());
             m_SwapChainImages[slot].pTexture = pTex;
 
-            CGSize size = [pLayer drawableSize];
             nvrhi::TextureDesc texDesc;
-            texDesc.width = uint32_t(size.width);
-            texDesc.height = uint32_t(size.height);
+            texDesc.width = m_SwapChainWidth;
+            texDesc.height = m_SwapChainHeight;
             texDesc.format = m_DeviceParams.swapChainFormat;
             if (texDesc.format != nvrhi::Format::SRGBA8_UNORM &&
                 texDesc.format != nvrhi::Format::SBGRA8_UNORM &&
@@ -263,6 +288,20 @@ bool DeviceManager_MTL::BeginFrame()
         }
 
         m_SwapChainIndex = slot;
+
+        // The base class builds swapchain framebuffers in BackBufferResized()
+        // while the backbuffer handles are still null (they only exist after
+        // drawable acquisition, i.e. now). Rebuild once the current slot's
+        // framebuffer exists with the right size; this also runs after resizes.
+        nvrhi::IFramebuffer* pCurrentFB = GetFramebuffer(slot);
+        nvrhi::FramebufferInfoEx fbInfo = pCurrentFB
+            ? pCurrentFB->getFramebufferInfo()
+            : nvrhi::FramebufferInfoEx();
+        if (!pCurrentFB || fbInfo.width != m_SwapChainWidth || fbInfo.height != m_SwapChainHeight)
+        {
+            BackBufferResized();
+        }
+
         return true;
     }
 }

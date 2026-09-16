@@ -116,6 +116,9 @@ private:
 
     std::vector<SwapChainImage> m_SwapChainImages;
     uint32_t m_SwapChainIndex = 0;
+    uint32_t m_NextSwapChainSlot = 0;
+    uint32_t m_SwapChainWidth = 0;
+    uint32_t m_SwapChainHeight = 0;
 
     uint32_t m_BackBufferCount = 3;
 
