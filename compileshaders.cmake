@@ -78,6 +78,7 @@ function(donut_compile_shaders)
         BYPRODUCTS_DXBC
         BYPRODUCTS_DXIL
         BYPRODUCTS_SPIRV
+        BYPRODUCTS_MSL
         SOURCES
         INCLUDES
         IGNORE_INCLUDES
@@ -204,7 +205,7 @@ function(donut_compile_shaders)
            ${ignore_includes}
            -D TARGET_D3D12
            --compiler "${SHADERMAKE_SLANG_PATH}"
-           --slang
+           --slang --slangHLSL
            --shaderModel ${params_SHADER_MODEL}
            ${project_name_arg})
 
@@ -304,7 +305,7 @@ function(donut_compile_shaders)
            -D SPIRV
            -D TARGET_VULKAN
            --compiler "${SHADERMAKE_SLANG_PATH}"
-           --slang
+           --slang --slangHLSL
            ${NVRHI_DEFAULT_VK_REGISTER_OFFSETS}
            --vulkanVersion ${VULKAN_VERSION}
            --shaderModel ${params_SHADER_MODEL}
@@ -325,28 +326,18 @@ function(donut_compile_shaders)
         endif()
     endif()
 
-    # MSL (Metal Shading Language) compilation via spirv-cross
-    # Pipeline: HLSL -> SPIRV (via DXC/Slang) -> MSL (via spirv-cross)
+    # MSL (Metal Shading Language) compilation.
+    # ShaderMake compiles HLSL -> SPIR-V via DXC and converts to MSL in-process
+    # using spirv-cross (resource indices remapped to the nvrhi Metal convention).
     if (params_MSL AND DONUT_WITH_METAL AND APPLE)
         if (NOT EXISTS "${SHADERMAKE_DXC_VK_PATH}")
-            message(FATAL_ERROR "donut_compile_shaders: DXC not found for MSL compilation -- please set SHADERMAKE_DXC_VK_PATH")
-        endif()
-        
-        # Find spirv-cross
-        find_program(SPIRV_CROSS_PATH spirv-cross)
-        if (NOT SPIRV_CROSS_PATH)
-            message(STATUS "donut_compile_shaders: spirv-cross not found, skipping MSL compilation")
-            set(params_MSL "")
+            message(STATUS "donut_compile_shaders: DXC (Vulkan SDK) not found, skipping MSL compilation")
         else()
-            set(spirv_intermediate "${CMAKE_CURRENT_BINARY_DIR}/${params_TARGET}_spirv_temp")
-            file(MAKE_DIRECTORY ${spirv_intermediate})
-
-            # Step 1: Compile HLSL -> SPIRV (DXC)
-            set(compilerCommandDXC ${SHADERMAKE_PATH}
+            set(compilerCommandMSL ${SHADERMAKE_PATH}
                --config ${params_CONFIG}
-               --out ${spirv_intermediate}
-               --platform SPIRV
-               --binary
+               --out ${params_MSL}
+               --platform MSL
+               ${output_format_arg}
                ${include_dirs}
                ${ignore_includes}
                -D SPIRV
@@ -354,42 +345,23 @@ function(donut_compile_shaders)
                --compiler "${SHADERMAKE_DXC_VK_PATH}"
                ${NVRHI_DEFAULT_VK_REGISTER_OFFSETS}
                --vulkanVersion ${VULKAN_VERSION}
-               --shaderModel ${params_SHADER_MODEL})
+               --shaderModel ${params_SHADER_MODEL}
+               ${project_name_arg})
 
-            list(APPEND compilerCommandDXC ${params_SHADERMAKE_OPTIONS})
-            list(APPEND compilerCommandDXC ${params_SHADERMAKE_OPTIONS_SPIRV})
+            list(APPEND compilerCommandMSL ${params_SHADERMAKE_OPTIONS})
+            list(APPEND compilerCommandMSL ${params_SHADERMAKE_OPTIONS_SPIRV})
+            separate_arguments(params_SHADERMAKE_OPTIONS_MSL NATIVE_COMMAND "${params_SHADERMAKE_OPTIONS_MSL}")
+            list(APPEND compilerCommandMSL ${params_SHADERMAKE_OPTIONS_MSL})
 
-            add_custom_command(TARGET ${params_TARGET} PRE_BUILD
-                COMMAND ${compilerCommandDXC}
-                COMMENT "Compiling shaders to SPIRV for Metal (${params_PROJECT_NAME})")
-
-            # Step 2: Convert SPIRV -> MSL using spirv-cross
-            set(msl_output_dir ${params_MSL})
-            file(MAKE_DIRECTORY ${msl_output_dir})
-
-            # Create a custom command to convert all SPIRV files to MSL
-            file(GLOB spirv_files "${spirv_intermediate}/*.spv")
-            
-            if (spirv_files)
-                set(msl_byproducts_with_paths "")
-                foreach(spirv_file IN LISTS spirv_files)
-                    get_filename_component(spirv_name ${spirv_file} NAME_WE)
-                    set(msl_output "${msl_output_dir}/${spirv_name}.metal")
-                    list(APPEND msl_byproducts_with_paths ${msl_output})
-                    
-                    add_custom_command(TARGET ${params_TARGET} PRE_BUILD
-                        COMMAND ${CMAKE_COMMAND} -E make_directory ${msl_output_dir}
-                        COMMAND ${SPIRV_CROSS_PATH} --msl --output ${msl_output} ${spirv_file}
-                        ${params_SHADERMAKE_OPTIONS_MSL}
-                        DEPENDS ${spirv_file}
-                        COMMENT "Converting ${spirv_name} to MSL for Metal"
-                        )
-                endforeach()
+            if ("${params_BYPRODUCTS_MSL}" STREQUAL "")
+                add_custom_command(TARGET ${params_TARGET} PRE_BUILD COMMAND ${compilerCommandMSL})
             else()
-                # If no SPIRV files found yet, add a fallback command
-                add_custom_command(TARGET ${params_TARGET} PRE_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E echo "No SPIRV files found for MSL conversion (will compile in next pass)"
-                    COMMENT "MSL: waiting for SPIRV compilation")
+                set(msl_byproducts_with_paths "")
+                foreach(relative_path IN LISTS params_BYPRODUCTS_MSL)
+                    list(APPEND msl_byproducts_with_paths "${params_MSL}/${relative_path}")
+                endforeach()
+
+                add_custom_command(TARGET ${params_TARGET} PRE_BUILD COMMAND ${compilerCommandMSL} BYPRODUCTS "${msl_byproducts_with_paths}")
             endif()
         endif()
     endif()
@@ -499,9 +471,15 @@ function(donut_compile_shaders_all_platforms)
     set(byproducts_dxil "")
     set(byproducts_spirv "")
     foreach(byproduct IN LISTS params_BYPRODUCTS_NO_EXT)
-        list(APPEND byproducts_dxbc "${byproduct}.dxbc.h")
-        list(APPEND byproducts_dxil "${byproduct}.dxil.h")
-        list(APPEND byproducts_spirv "${byproduct}.spirv.h")
+        if ("${params_OUTPUT_FORMAT}" STREQUAL "HEADER")
+            list(APPEND byproducts_dxbc "${byproduct}.dxbc.h")
+            list(APPEND byproducts_dxil "${byproduct}.dxil.h")
+            list(APPEND byproducts_spirv "${byproduct}.spirv.h")
+        else()
+            list(APPEND byproducts_dxbc "${byproduct}.dxbc.bin")
+            list(APPEND byproducts_dxil "${byproduct}.dxil.bin")
+            list(APPEND byproducts_spirv "${byproduct}.spirv.bin")
+        endif()
     endforeach()
     
     if (params_SLANG)
