@@ -272,14 +272,20 @@ nvrhi::GraphicsAPI donut::app::GetGraphicsAPIFromCommandLine(int argc, const cha
             return nvrhi::GraphicsAPI::D3D12;
         else if(!strcmp(arg, "-vk") || !strcmp(arg, "-vulkan") || !strcmp(arg, "--vk") || !strcmp(arg, "--vulkan"))
             return nvrhi::GraphicsAPI::VULKAN;
+        else if(!strcmp(arg, "-mtl") || !strcmp(arg, "-metal") || !strcmp(arg, "--mtl") || !strcmp(arg, "--metal"))
+            return nvrhi::GraphicsAPI::METAL;
     }
 
-#if DONUT_WITH_DX12
+#if defined(__APPLE__) && DONUT_WITH_METAL
+    return nvrhi::GraphicsAPI::METAL;
+#elif DONUT_WITH_DX12
     return nvrhi::GraphicsAPI::D3D12;
 #elif DONUT_WITH_VULKAN
     return nvrhi::GraphicsAPI::VULKAN;
 #elif DONUT_WITH_DX11
     return nvrhi::GraphicsAPI::D3D11;
+#elif DONUT_WITH_METAL
+    return nvrhi::GraphicsAPI::METAL;
 #else
     #error "No Graphics API defined"
 #endif

@@ -27,46 +27,35 @@
 #include <nvrhi/validation.h>
 
 #import <Metal/Metal.hpp>
-#import <MetalKit/MetalKit.hpp>
+#import <AppKit/AppKit.h>
+#import <QuartzCore/CAMetalLayer.h>
+
+// glfw3.h is already included via DeviceManager.h; expose the Cocoa native accessors
+#define GLFW_EXPOSE_NATIVE_COCOA
+#include <GLFW/glfw3native.h>
 
 using namespace donut;
 using namespace donut::app;
 
-static constexpr uint32_t kGraphicsQueueIndex = 0;
-
-#define CHECK(a) if (!(a)) { return false; }
-
-// Helper to convert NSString to std::string
-static std::string nsStringToString(NSString* str)
-{
-    if (!str) return "";
-    const char* cStr = [str UTF8String];
-    return std::string(cStr ? cStr : "");
-}
-
 bool DeviceManager_MTL::createDevice()
 {
-    MTL::Device* pDevice = MTL::CreateSystemDefaultDevice();
-    if (!pDevice)
-    {
-        log::error("Metal: No system device available");
-        return false;
-    }
-
-    pDevice->retain();
-    m_pMTLDevice = pDevice;
-
-    m_RendererString = "Metal (" + nsStringToString(pDevice->name()) + ")";
-    log::message(m_DeviceParams.infoLogSeverity, "Metal device: %s", m_RendererString.c_str());
-
-    m_pMTLCommandQueue = pDevice->newCommandQueue();
-    m_pMTLCommandQueue->retain();
-
     nvrhi::metal::DeviceDesc deviceDesc;
     deviceDesc.errorCB = &DefaultMessageCallback::GetInstance();
     deviceDesc.aftermathEnabled = false;
 
     m_NvrhiDevice = nvrhi::metal::createDevice(deviceDesc);
+    if (!m_NvrhiDevice)
+    {
+        log::error("Metal: failed to create nvrhi device");
+        return false;
+    }
+
+    // The nvrhi device owns the MTL::Device; share it with the swapchain layer.
+    m_pMTLDevice = m_NvrhiDevice->getNativeDevice();
+    m_pMTLDevice->retain();
+
+    m_RendererString = "Metal (" + std::string(m_pMTLDevice->name()->utf8String()) + ")";
+    log::message(m_DeviceParams.infoLogSeverity, "Metal device: %s", m_RendererString.c_str());
 
     if (m_DeviceParams.enableNvrhiValidationLayer)
     {
@@ -79,106 +68,63 @@ bool DeviceManager_MTL::createDevice()
 bool DeviceManager_MTL::createSwapChain()
 {
     m_SwapChainImages.clear();
-    m_CommittedCommandBuffers.clear();
 
-    uint32_t width = 0, height = 0;
+    if (!m_Window || !m_pMTLDevice)
+        return false;
 
-    if (m_pMTKView)
-    {
-        width = uint32_t(m_pMTKView->pixelSize().width);
-        height = uint32_t(m_pMTKView->pixelSize().height);
-    }
-    else if (m_Window)
-    {
-        int w, h;
-        glfwGetFramebufferSize(m_Window, &w, &h);
-        width = static_cast<uint32_t>(w);
-        height = static_cast<uint32_t>(h);
-    }
-
-    if (width == 0 || height == 0)
+    int fbWidth = 0, fbHeight = 0;
+    glfwGetFramebufferSize(m_Window, &fbWidth, &fbHeight);
+    if (fbWidth == 0 || fbHeight == 0)
     {
         log::warning("Metal: Swapchain size is zero");
         return true;
     }
 
-    size_t numImages = 3;
-    if (m_pMTKView)
+    MTLPixelFormat pixelFormat = MTLPixelFormatBGRA8Unorm;
+    nvrhi::Format format = nvrhi::Format::BGRA8_UNORM;
+    switch (m_DeviceParams.swapChainFormat)
     {
-        numImages = m_pMTKView->maximumDrawableCount();
-        if (numImages < 2) numImages = 2;
-        if (numImages > 4) numImages = 4;
-    }
-
-    MTL::PixelFormat pixelFormat = MTLPixelFormatBGRA8Unorm;
-
-    nvrhi::Format format = m_DeviceParams.swapChainFormat;
-    if (format == nvrhi::Format::SRGBA8_UNORM)
-    {
+    case nvrhi::Format::SRGBA8_UNORM:
         pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
         format = nvrhi::Format::SRGBA8_UNORM;
-    }
-    else if (format == nvrhi::Format::BGRA8_UNORM)
-    {
-        pixelFormat = MTLPixelFormatBGRA8Unorm;
-    }
-    else if (format == nvrhi::Format::RGBA8_UNORM)
-    {
+        break;
+    case nvrhi::Format::SBGRA8_UNORM:
+        pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+        format = nvrhi::Format::SBGRA8_UNORM;
+        break;
+    case nvrhi::Format::RGBA8_UNORM:
         pixelFormat = MTLPixelFormatRGBA8Unorm;
-    }
-    else
-    {
         format = nvrhi::Format::RGBA8_UNORM;
+        break;
+    default:
+        break;
     }
 
-    for (size_t i = 0; i < numImages; i++)
+    @autoreleasepool
     {
-        SwapChainImage sci;
+        NSWindow* pNSWindow = glfwGetCocoaWindow(m_Window);
+        NSView* pView = [pNSWindow contentView];
 
-        if (m_pMTKView)
-        {
-            // MetalKit manages drawables, we'll get the texture from the drawable at runtime
-            sci.pTexture = nullptr; // Will be set from drawable in BeginFrame
-        }
-        else
-        {
-            // For non-MetalKit case (headless), create our own textures
-            auto textureDesc = MTL::TextureDescriptor::alloc()->init();
-            textureDesc->setTextureType(MTL::TextureType2D);
-            textureDesc->setWidth(width);
-            textureDesc->setHeight(height);
-            textureDesc->setPixelFormat(pixelFormat);
-            textureDesc->setSampleCount(m_DeviceParams.swapChainSampleCount);
-            textureDesc->setUsage(MTL::TextureUsageRenderTarget);
-            textureDesc->setStorageMode(MTL::StorageModePrivate);
-            textureDesc->allocStorage();
+        CAMetalLayer* pLayer = [CAMetalLayer layer];
+        pLayer.device = (__bridge id<MTLDevice>)m_pMTLDevice;
+        pLayer.pixelFormat = pixelFormat;
+        pLayer.framebufferOnly = YES;
+        pLayer.drawableSize = CGSizeMake(fbWidth, fbHeight);
+        pLayer.maximumDrawableCount = m_BackBufferCount;
+        pLayer.displaySyncEnabled = m_DeviceParams.vsyncEnabled;
 
-            sci.pTexture = m_pMTLDevice->newTexture(textureDesc);
-            textureDesc->release();
-        }
+        [pView setLayer:pLayer];
+        [pView setWantsLayer:YES];
 
-        if (sci.pTexture)
-        {
-            nvrhi::TextureDesc texDesc;
-            texDesc.width = width;
-            texDesc.height = height;
-            texDesc.format = format;
-            texDesc.debugName = "Swap chain image";
-            texDesc.initialState = nvrhi::ResourceStates::Present;
-            texDesc.keepInitialState = true;
-            texDesc.isRenderTarget = true;
-
-            sci.rhiHandle = m_NvrhiDevice->createHandleForNativeTexture(
-                nvrhi::ObjectTypes::Nvrhi_MTL_Texture,
-                nvrhi::Object(sci.pTexture),
-                texDesc
-            );
-        }
-
-        m_SwapChainImages.push_back(sci);
+        m_pMetalLayer = (void*)CFBridgingRetain(pLayer);
     }
 
+    // Drawable textures are acquired per frame from the layer; the nvrhi
+    // handles are created lazily in BeginFrame, keyed by the texture pointer.
+    m_SwapChainImages.resize(m_BackBufferCount);
     m_SwapChainIndex = 0;
+
+    (void)format;
 
     return true;
 }
@@ -187,33 +133,31 @@ void DeviceManager_MTL::destroySwapChain()
 {
     for (auto& img : m_SwapChainImages)
     {
-        if (img.rhiHandle)
-        {
-            img.rhiHandle->getNativeObject(nvrhi::ObjectTypes::Nvrhi_MTL_Texture);
-            img.rhiHandle = nullptr;
-        }
-        if (img.pTexture)
-        {
-            img.pTexture->release();
-            img.pTexture = nullptr;
-        }
+        img.rhiHandle = nullptr;
+        img.pTexture = nullptr;
     }
     m_SwapChainImages.clear();
 
-    for (auto* pCB : m_CommittedCommandBuffers)
+    if (m_pCurrentDrawable)
     {
-        pCB->release();
+        CFRelease(m_pCurrentDrawable);
+        m_pCurrentDrawable = nullptr;
     }
-    m_CommittedCommandBuffers.clear();
+
+    if (m_pMetalLayer)
+    {
+        CAMetalLayer* pLayer = (CAMetalLayer*)CFBridgingRelease(m_pMetalLayer);
+        m_pMetalLayer = nullptr;
+        @autoreleasepool
+        {
+            [pLayer removeFromSuperlayer];
+            pLayer = nil;
+        }
+    }
 }
 
 bool DeviceManager_MTL::CreateInstanceInternal()
 {
-    if (m_DeviceParams.enableDebugRuntime)
-    {
-        // Metal validation is typically enabled via environment variable on macOS
-    }
-
     return true;
 }
 
@@ -226,7 +170,7 @@ bool DeviceManager_MTL::EnumerateAdapters(std::vector<AdapterInfo>& outAdapters)
         return false;
 
     AdapterInfo adapterInfo;
-    adapterInfo.name = nsStringToString(pDevice->name());
+    adapterInfo.name = pDevice->name()->utf8String();
     adapterInfo.vendorID = 0;
     adapterInfo.deviceID = 0;
     adapterInfo.dedicatedVideoMemory = 0;
@@ -238,61 +182,11 @@ bool DeviceManager_MTL::EnumerateAdapters(std::vector<AdapterInfo>& outAdapters)
 
 bool DeviceManager_MTL::CreateDevice()
 {
-    m_pMTLDevice = MTL::CreateSystemDefaultDevice();
-    if (!m_pMTLDevice)
-    {
-        log::error("Metal: No system device available");
-        return false;
-    }
-    m_pMTLDevice->retain();
-
-    m_pMTLCommandQueue = m_pMTLDevice->newCommandQueue();
-    m_pMTLCommandQueue->retain();
-
-    m_RendererString = "Metal (" + nsStringToString(m_pMTLDevice->name()) + ")";
-    log::message(m_DeviceParams.infoLogSeverity, "Metal device: %s", m_RendererString.c_str());
-
-    nvrhi::metal::DeviceDesc deviceDesc;
-    deviceDesc.errorCB = &DefaultMessageCallback::GetInstance();
-    deviceDesc.aftermathEnabled = false;
-
-    m_NvrhiDevice = nvrhi::metal::createDevice(deviceDesc);
-
-    if (m_DeviceParams.enableNvrhiValidationLayer)
-    {
-        m_ValidationLayer = nvrhi::validation::createValidationLayer(m_NvrhiDevice);
-    }
-
-    return true;
+    return createDevice();
 }
 
 bool DeviceManager_MTL::CreateSwapChain()
 {
-    // Create MTKView for the window on macOS
-    #if defined(__APPLE__)
-    if (m_Window)
-    {
-        id pNSView = glfwGetCocoaView(m_Window);
-        if ([pNSView isKindOfClass:[NSView class]])
-        {
-            NSView* pView = static_cast<NSView*>(pNSView);
-
-            @autoreleasepool
-            {
-                m_pMTKView = [[MTKView alloc] initWithFrame:[pView frame] pixelFormat:MTLPixelFormatBGRA8Unorm];
-                m_pMTKView->device = m_pMTLDevice;
-                m_pMTKView->colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-                m_pMTKView->depthPixelFormat = MTLPixelFormatDepth32Float;
-                m_pMTKView->sampleCount = m_DeviceParams.swapChainSampleCount;
-                m_pMTKView->enableSetNeedsDisplay = true;
-                m_pMTKView->layoutMode = MTKViewLayoutModeAutomaticallyResized;
-
-                [pView addSubview:m_pMTKView];
-            }
-        }
-    }
-    #endif
-
     return createSwapChain();
 }
 
@@ -304,12 +198,6 @@ void DeviceManager_MTL::DestroyDeviceAndSwapChain()
     m_ValidationLayer = nullptr;
     m_RendererString.clear();
 
-    if (m_pMTLCommandQueue)
-    {
-        m_pMTLCommandQueue->release();
-        m_pMTLCommandQueue = nullptr;
-    }
-
     if (m_pMTLDevice)
     {
         m_pMTLDevice->release();
@@ -319,69 +207,92 @@ void DeviceManager_MTL::DestroyDeviceAndSwapChain()
 
 bool DeviceManager_MTL::BeginFrame()
 {
-    if (!m_pMTKView)
+    if (!m_pMetalLayer)
         return true;
 
     @autoreleasepool
     {
-        m_pCurrentDrawable = [m_pMTKView nextDrawable];
+        CAMetalLayer* pLayer = (__bridge CAMetalLayer*)m_pMetalLayer;
+
+        // nextDrawable blocks until one is available (frame pacing)
+        id<CAMetalDrawable> drawable = [pLayer nextDrawable];
+        if (!drawable)
+            return false;
+
         if (m_pCurrentDrawable)
+            CFRelease(m_pCurrentDrawable);
+        m_pCurrentDrawable = (void*)CFBridgingRetain(drawable);
+
+        MTL::Texture* pTex = (MTL::Texture*)[drawable texture];
+
+        // Find or create the nvrhi handle for this drawable texture
+        uint32_t slot = UINT32_MAX;
+        for (uint32_t i = 0; i < m_SwapChainImages.size(); i++)
         {
-            id drawable = [m_pCurrentDrawable retain];
-            MTL::Texture* pTex = [drawable drawableTexture];
-
-            if (pTex)
+            if (m_SwapChainImages[i].pTexture == pTex)
             {
-                pTex->retain();
-                m_SwapChainImages[0].pTexture = pTex;
-                m_SwapChainIndex = 0;
-                [drawable release];
-                return true;
+                slot = i;
+                break;
             }
-            [drawable release];
         }
-    }
+        if (slot == UINT32_MAX)
+        {
+            // Round-robin replacement
+            slot = m_SwapChainIndex;
+            m_SwapChainImages[slot].pTexture = pTex;
 
-    return false;
+            CGSize size = [pLayer drawableSize];
+            nvrhi::TextureDesc texDesc;
+            texDesc.width = uint32_t(size.width);
+            texDesc.height = uint32_t(size.height);
+            texDesc.format = m_DeviceParams.swapChainFormat;
+            if (texDesc.format != nvrhi::Format::SRGBA8_UNORM &&
+                texDesc.format != nvrhi::Format::SBGRA8_UNORM &&
+                texDesc.format != nvrhi::Format::RGBA8_UNORM)
+                texDesc.format = nvrhi::Format::BGRA8_UNORM;
+            texDesc.debugName = "Swap chain image";
+            texDesc.initialState = nvrhi::ResourceStates::Present;
+            texDesc.keepInitialState = true;
+            texDesc.isRenderTarget = true;
+
+            m_SwapChainImages[slot].rhiHandle = m_NvrhiDevice->createHandleForNativeTexture(
+                nvrhi::ObjectTypes::Nvrhi_MTL_Texture,
+                nvrhi::Object(pTex),
+                texDesc
+            );
+        }
+
+        m_SwapChainIndex = slot;
+        return true;
+    }
 }
 
 bool DeviceManager_MTL::Present()
 {
-    if (!m_pCurrentDrawable || !m_pMTKView)
+    if (!m_pCurrentDrawable)
         return true;
 
-    MTL::CommandBuffer* pCommandBuffer = m_pMTLCommandQueue->commandBuffer();
-    if (!pCommandBuffer)
-        return false;
-
-    // Wait for previous frame to complete
-    while (m_CommittedCommandBuffers.size() >= m_DeviceParams.maxFramesInFlight)
+    @autoreleasepool
     {
-        MTL::CommandBuffer* pOldCB = m_CommittedCommandBuffers.front();
-        m_CommittedCommandBuffers.erase(m_CommittedCommandBuffers.begin());
+        // Present on the nvrhi graphics queue so presentation is ordered after
+        // all rendering command buffers submitted through nvrhi.
+        MTL::CommandQueue* pQueue = (MTL::CommandQueue*)m_NvrhiDevice->getNativeQueue(
+            nvrhi::ObjectTypes::Nvrhi_MTL_CommandQueue, nvrhi::CommandQueue::Graphics);
 
-        pOldCB->waitUntilCompleted();
-        pOldCB->release();
+        if (pQueue)
+        {
+            MTL::CommandBuffer* pCommandBuffer = pQueue->commandBuffer();
+            id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)CFBridgingRelease(m_pCurrentDrawable);
+            m_pCurrentDrawable = nullptr;
+            pCommandBuffer->presentDrawable((MTL::Drawable*)drawable);
+            pCommandBuffer->commit();
+        }
     }
-
-    pCommandBuffer->presentDrawable(m_pCurrentDrawable);
-
-    pCommandBuffer->addCompletedHandler([](MTL::CommandBuffer* pCB) {
-        pCB->release();
-    });
-
-    pCommandBuffer->retain();
-    m_CommittedCommandBuffers.push_back(pCommandBuffer);
-
-    pCommandBuffer->commit();
-
-    // Update frame index for next frame
-    m_SwapChainIndex = (m_SwapChainIndex + 1) % m_SwapChainImages.size();
 
     return true;
 }
 
-DeviceManager *DeviceManager::CreateMTL()
+donut::app::DeviceManager* donut::app::DeviceManager::CreateMTL()
 {
     return new DeviceManager_MTL();
 }

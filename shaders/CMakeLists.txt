@@ -92,6 +92,7 @@ if(DONUT_WITH_AFTERMATH OR DONUT_EMBED_SHADER_PDBS)
 endif()
 
 donut_compile_shaders_all_platforms(
+	SLANG
 	TARGET donut_shaders
 	PROJECT_NAME "Donut"
 	CONFIG ${CMAKE_CURRENT_LIST_DIR}/DonutShaders.cfg

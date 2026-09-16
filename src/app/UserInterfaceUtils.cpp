@@ -27,6 +27,7 @@
 
 #include <filesystem>
 #include <imgui.h>
+#include <sstream>
 
 #ifndef _WIN32
 #include <unistd.h>

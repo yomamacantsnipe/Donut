@@ -438,7 +438,7 @@ void emit_billboard_circle_segment(inout ManipulatorStream stream, uint segment,
 // Geometry Shader
 
 [maxvertexcount(MAXVERTS)]
-void gs_main(point float4 input[1] : SV_Position, uint primId : SV_PrimitiveID, inout ManipulatorStream stream)
+void gs_main(float4 input : SV_Position, uint primId : SV_PrimitiveID, inout ManipulatorStream stream)
 {
     float manip_scale = compute_screen_scale();
     uint num = g_Manip.numSegments;

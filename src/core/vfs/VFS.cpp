@@ -184,8 +184,8 @@ static int enumerateNativeFiles(const char* pattern, bool directories, enumerate
 
 #else // WIN32
 
-    glob64_t glob_matches;
-    int globResult = glob64(pattern, 0 /*flags*/, nullptr /*errfunc*/, &glob_matches);
+    glob_t glob_matches;
+    int globResult = glob(pattern, 0 /*flags*/, nullptr /*errfunc*/, &glob_matches);
 
     if (globResult == 0)
     {
@@ -205,7 +205,7 @@ static int enumerateNativeFiles(const char* pattern, bool directories, enumerate
                 }
             }
         }
-        globfree64(&glob_matches);
+        globfree(&glob_matches);
 
         return numEntries;
     }

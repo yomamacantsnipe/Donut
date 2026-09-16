@@ -867,9 +867,11 @@ void Scene::CreateMeshBuffers(nvrhi::ICommandList* commandList)
 
         if (!buffers->vertexBuffer)
         {
+            uint64_t bufferByteSize = 0;
             nvrhi::BufferDesc bufferDesc;
             bufferDesc.isVertexBuffer = true;
-            bufferDesc.byteSize = 0;
+            bufferByteSize = 0;
+            bufferDesc.byteSize = bufferByteSize;
             bufferDesc.debugName = "VertexBuffer";
             bufferDesc.canHaveTypedViews = true;
             bufferDesc.canHaveRawViews = true;
@@ -878,49 +880,49 @@ void Scene::CreateMeshBuffers(nvrhi::ICommandList* commandList)
             if (!buffers->positionData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Position), 
-                    buffers->positionData.size() * sizeof(buffers->positionData[0]), bufferDesc.byteSize);
+                    buffers->positionData.size() * sizeof(buffers->positionData[0]), bufferByteSize);
             }
 
             if (!buffers->normalData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Normal),
-                    buffers->normalData.size() * sizeof(buffers->normalData[0]), bufferDesc.byteSize);
+                    buffers->normalData.size() * sizeof(buffers->normalData[0]), bufferByteSize);
             }
 
             if (!buffers->tangentData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Tangent),
-                    buffers->tangentData.size() * sizeof(buffers->tangentData[0]), bufferDesc.byteSize);
+                    buffers->tangentData.size() * sizeof(buffers->tangentData[0]), bufferByteSize);
             }
 
             if (!buffers->texcoord1Data.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::TexCoord1),
-                    buffers->texcoord1Data.size() * sizeof(buffers->texcoord1Data[0]), bufferDesc.byteSize);
+                    buffers->texcoord1Data.size() * sizeof(buffers->texcoord1Data[0]), bufferByteSize);
             }
 
             if (!buffers->texcoord2Data.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::TexCoord2),
-                    buffers->texcoord2Data.size() * sizeof(buffers->texcoord2Data[0]), bufferDesc.byteSize);
+                    buffers->texcoord2Data.size() * sizeof(buffers->texcoord2Data[0]), bufferByteSize);
             }
 
             if (!buffers->weightData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::JointWeights),
-                    buffers->weightData.size() * sizeof(buffers->weightData[0]), bufferDesc.byteSize);
+                    buffers->weightData.size() * sizeof(buffers->weightData[0]), bufferByteSize);
             }
 
             if (!buffers->jointData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::JointIndices),
-                    buffers->jointData.size() * sizeof(buffers->jointData[0]), bufferDesc.byteSize);
+                    buffers->jointData.size() * sizeof(buffers->jointData[0]), bufferByteSize);
             }
 
             if (!buffers->radiusData.empty())
             {
                 AppendBufferRange(buffers->getVertexBufferRange(VertexAttribute::CurveRadius),
-                    buffers->radiusData.size() * sizeof(buffers->radiusData[0]), bufferDesc.byteSize);
+                    buffers->radiusData.size() * sizeof(buffers->radiusData[0]), bufferByteSize);
             }
 
             if (bufferDesc.byteSize == 0)
@@ -1019,42 +1021,43 @@ void Scene::CreateMeshBuffers(nvrhi::ICommandList* commandList)
             const auto& prototypeBuffers = skinnedInstance->GetPrototypeMesh()->buffers;
             const auto& skinnedBuffers = skinnedMesh->buffers;
 
-            size_t skinnedVertexBufferSize = 0;
+            uint64_t skinnedVertexBufferSize = 0;
             assert(prototypeBuffers->hasAttribute(VertexAttribute::Position));
 
             AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::Position),
-                totalVertices * sizeof(float3), skinnedVertexBufferSize);
+                (size_t)totalVertices * sizeof(float3), skinnedVertexBufferSize);
     
             AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::PrevPosition),
-                totalVertices * sizeof(float3), skinnedVertexBufferSize);
+                (size_t)totalVertices * sizeof(float3), skinnedVertexBufferSize);
             
             if(prototypeBuffers->hasAttribute(VertexAttribute::Normal))
             {
                 AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::Normal),
-                    totalVertices * sizeof(uint32_t), skinnedVertexBufferSize);
+                    (size_t)totalVertices * sizeof(uint32_t), skinnedVertexBufferSize);
             }
 
             if (prototypeBuffers->hasAttribute(VertexAttribute::Tangent))
             {
                 AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::Tangent),
-                    totalVertices * sizeof(uint32_t), skinnedVertexBufferSize);
+                    (size_t)totalVertices * sizeof(uint32_t), skinnedVertexBufferSize);
             }
 
             if (prototypeBuffers->hasAttribute(VertexAttribute::TexCoord1))
             {
                 AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::TexCoord1),
-                    totalVertices * sizeof(float2), skinnedVertexBufferSize);
+                    (size_t)totalVertices * sizeof(float2), skinnedVertexBufferSize);
             }
 
             if (prototypeBuffers->hasAttribute(VertexAttribute::TexCoord2))
             {
                 AppendBufferRange(skinnedBuffers->getVertexBufferRange(VertexAttribute::TexCoord2),
-                    totalVertices * sizeof(float2), skinnedVertexBufferSize);
+                    (size_t)totalVertices * sizeof(float2), skinnedVertexBufferSize);
             }
 
             nvrhi::BufferDesc bufferDesc;
             bufferDesc.isVertexBuffer = true;
-            bufferDesc.byteSize = skinnedVertexBufferSize;
+            uint64_t bufferByteSize = skinnedVertexBufferSize;
+            bufferDesc.byteSize = bufferByteSize;
             bufferDesc.debugName = "SkinnedVertexBuffer";
             bufferDesc.canHaveTypedViews = true;
             bufferDesc.canHaveRawViews = true;

@@ -40,6 +40,7 @@ struct ScanKey
     
     uint packed;
 
+    [mutating]
     void encode(uint distSq, uint widget) { packed = (distSq << kWidgetBits) | widget; }     
 
     bool empty() { return packed == kEmpty; }

@@ -28,7 +28,7 @@
 #include <donut/core/log.h>
 
 #include <Metal/Metal.hpp>
-#include <MetalKit/MetalKit.hpp>
+// #include <MetalKit/MetalKit.hpp>
 
 #include <nvrhi/metal.h>
 #include <nvrhi/validation.h>
@@ -60,7 +60,7 @@ protected:
 
     void ResizeSwapChain() override
     {
-        if (m_pMTKView)
+        if (m_pMetalLayer)
         {
             destroySwapChain();
             createSwapChain();
@@ -102,10 +102,11 @@ private:
     std::string m_RendererString;
 
     MTL::Device* m_pMTLDevice = nullptr;
-    MTL::CommandQueue* m_pMTLCommandQueue = nullptr;
 
-    MTK::Drawable* m_pCurrentDrawable = nullptr;
-    MTK::View* m_pMTKView = nullptr;
+    // ObjC objects held opaquely (this header is also included from pure C++ TUs):
+    // m_pMetalLayer is a CAMetalLayer*, m_pCurrentDrawable is an id<CAMetalDrawable>.
+    void* m_pMetalLayer = nullptr;
+    void* m_pCurrentDrawable = nullptr;
 
     struct SwapChainImage
     {
@@ -116,7 +117,7 @@ private:
     std::vector<SwapChainImage> m_SwapChainImages;
     uint32_t m_SwapChainIndex = 0;
 
-    std::vector<MTL::CommandBuffer*> m_CommittedCommandBuffers;
+    uint32_t m_BackBufferCount = 3;
 
     nvrhi::metal::DeviceHandle m_NvrhiDevice;
     nvrhi::DeviceHandle m_ValidationLayer;
