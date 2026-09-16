@@ -323,6 +323,11 @@ bool DeviceManager_MTL::Present()
             MTL::CommandBuffer* pCommandBuffer = pQueue->commandBuffer();
             id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)CFBridgingRelease(m_pCurrentDrawable);
             m_pCurrentDrawable = nullptr;
+
+            // Keep the present ordered after all rendering submitted so far
+            // (Metal does not order command buffers on a queue by itself).
+            m_NvrhiDevice->attachSubmitOrdering(pCommandBuffer);
+
             pCommandBuffer->presentDrawable((MTL::Drawable*)drawable);
             pCommandBuffer->commit();
         }
