@@ -115,6 +115,12 @@ private:
     };
 
     std::vector<SwapChainImage> m_SwapChainImages;
+    // Keeps every created drawable handle alive for the lifetime of the
+    // swapchain: swapchain framebuffers hold RAW texture pointers, so a
+    // handle must never be released while a framebuffer references it.
+    // CAMetalLayer rotates its texture pool, so more than m_BackBufferCount
+    // distinct drawables can appear over time.
+    std::vector<nvrhi::TextureHandle> m_AllDrawableHandles;
     uint32_t m_SwapChainIndex = 0;
     uint32_t m_NextSwapChainSlot = 0;
     uint32_t m_SwapChainWidth = 0;

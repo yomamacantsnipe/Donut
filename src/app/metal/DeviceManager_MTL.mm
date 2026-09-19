@@ -137,6 +137,7 @@ void DeviceManager_MTL::destroySwapChain()
         img.pTexture = nullptr;
     }
     m_SwapChainImages.clear();
+    m_AllDrawableHandles.clear();
     m_SwapChainIndex = 0;
     m_NextSwapChainSlot = 0;
     m_SwapChainWidth = 0;
@@ -230,6 +231,8 @@ bool DeviceManager_MTL::BeginFrame()
         if (uint32_t(drawableSize.width) != m_SwapChainWidth ||
             uint32_t(drawableSize.height) != m_SwapChainHeight)
         {
+            // Keep the handles alive in m_AllDrawableHandles; just detach them
+            // from the slots. Framebuffers get rebuilt below / per-slot.
             for (auto& img : m_SwapChainImages)
             {
                 img.rhiHandle = nullptr;
@@ -285,6 +288,7 @@ bool DeviceManager_MTL::BeginFrame()
                 nvrhi::Object(pTex),
                 texDesc
             );
+            m_AllDrawableHandles.push_back(m_SwapChainImages[slot].rhiHandle);
         }
 
         m_SwapChainIndex = slot;
