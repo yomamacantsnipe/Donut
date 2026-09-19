@@ -154,6 +154,10 @@ bool DeviceManager_VK::createInstance()
         requiredExtensions.erase(name);
     }
 
+    // MoltenVK 1.2+ no longer advertises VK_KHR_get_physical_device_properties2
+    // (promoted to core in Vulkan 1.1); don't require it when unsupported.
+    requiredExtensions.erase("VK_KHR_get_physical_device_properties2");
+
     if (!requiredExtensions.empty())
     {
         std::stringstream ss;
