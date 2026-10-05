@@ -105,16 +105,28 @@ bool DeviceManager_MTL::createSwapChain()
         NSWindow* pNSWindow = glfwGetCocoaWindow(m_Window);
         NSView* pView = [pNSWindow contentView];
 
+        // Adding the layer as a SUB-LAYER (rather than replacing the view's
+        // layer) keeps AppKit's layout of the view intact. Replacing the
+        // layer of GLFW's content view breaks its geometry management and
+        // produces degenerate drawables (4x4 / 1x1) and negative-height
+        // layout warnings.
         CAMetalLayer* pLayer = [CAMetalLayer layer];
         pLayer.device = (__bridge id<MTLDevice>)m_pMTLDevice;
         pLayer.pixelFormat = pixelFormat;
-        pLayer.framebufferOnly = YES;
-        pLayer.drawableSize = CGSizeMake(fbWidth, fbHeight);
+        // The DUMP_PREFIX frame dump (see Present) blits from the drawable.
+        pLayer.framebufferOnly = getenv("DUMP_PREFIX") == nullptr;
+        pLayer.frame = pView.bounds;
+        pLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+        // Render at 1x: the framework sizes window-management structures
+        // (depth buffer, viewport state) from glfwGetWindowSize, which is in
+        // points. A retina-scale drawable (bounds * backingScaleFactor) would
+        // disagree with those sizes and render into a sub-rectangle.
+        pLayer.contentsScale = 1.0;
         pLayer.maximumDrawableCount = m_BackBufferCount;
         pLayer.displaySyncEnabled = m_DeviceParams.vsyncEnabled;
 
-        [pView setLayer:pLayer];
         [pView setWantsLayer:YES];
+        [pView.layer addSublayer:pLayer];
 
         m_pMetalLayer = (void*)CFBridgingRetain(pLayer);
     }
@@ -219,29 +231,6 @@ bool DeviceManager_MTL::BeginFrame()
     {
         CAMetalLayer* pLayer = (__bridge CAMetalLayer*)m_pMetalLayer;
 
-        // A zero-sized drawable (window not laid out yet, occluded, or minimized)
-        // must not reach nvrhi: the swapchain texture desc and any dependent
-        // render targets would be created with zero extents, which Metal rejects.
-        CGSize drawableSize = [pLayer drawableSize];
-        if (drawableSize.width < 1.0 || drawableSize.height < 1.0)
-            return false;
-
-        // On resize (or contentsScale change), invalidate the cached nvrhi
-        // handles so they are recreated with the current drawable size.
-        if (uint32_t(drawableSize.width) != m_SwapChainWidth ||
-            uint32_t(drawableSize.height) != m_SwapChainHeight)
-        {
-            // Keep the handles alive in m_AllDrawableHandles; just detach them
-            // from the slots. Framebuffers get rebuilt below / per-slot.
-            for (auto& img : m_SwapChainImages)
-            {
-                img.rhiHandle = nullptr;
-                img.pTexture = nullptr;
-            }
-            m_SwapChainWidth = uint32_t(drawableSize.width);
-            m_SwapChainHeight = uint32_t(drawableSize.height);
-        }
-
         // nextDrawable blocks until one is available (frame pacing)
         id<CAMetalDrawable> drawable = [pLayer nextDrawable];
         if (!drawable)
@@ -253,14 +242,48 @@ bool DeviceManager_MTL::BeginFrame()
 
         MTL::Texture* pTex = (MTL::Texture*)[drawable texture];
 
-        // Find or create the nvrhi handle for this drawable texture
+        // The drawable texture's dimensions are authoritative - the layer can
+        // resize its drawables at any time (window resize, display change,
+        // AppKit layout). A zero/tiny drawable (window not laid out yet,
+        // occluded, or minimized) must not reach nvrhi: the swapchain texture
+        // desc and any dependent render targets would be created with zero
+        // extents, which Metal rejects.
+        uint32_t texWidth = uint32_t(pTex->width());
+        uint32_t texHeight = uint32_t(pTex->height());
+        if (texWidth < 1 || texHeight < 1)
+            return false;
+
+        // On any size change, detach the cached handles from the slots (they
+        // stay alive in m_AllDrawableHandles). Framebuffers are rebuilt
+        // below / per-slot when the new-size handles appear.
+        if (texWidth != m_SwapChainWidth || texHeight != m_SwapChainHeight)
+        {
+            for (auto& img : m_SwapChainImages)
+            {
+                img.rhiHandle = nullptr;
+                img.pTexture = nullptr;
+            }
+            m_SwapChainWidth = texWidth;
+            m_SwapChainHeight = texHeight;
+        }
+
+        // Find or create the nvrhi handle for this drawable texture. Matching
+        // by pointer alone is unsafe: MTLTexture allocations are freed and
+        // reused as the layer resizes its drawable pool (window resize,
+        // display change), so a stale handle could wrap a DIFFERENT-sized
+        // texture that happens to live at the same address. Verify the
+        // wrapped desc dimensions as well.
         uint32_t slot = UINT32_MAX;
         for (uint32_t i = 0; i < m_SwapChainImages.size(); i++)
         {
             if (m_SwapChainImages[i].pTexture == pTex && m_SwapChainImages[i].rhiHandle)
             {
-                slot = i;
-                break;
+                const nvrhi::TextureDesc& handleDesc = m_SwapChainImages[i].rhiHandle->getDesc();
+                if (handleDesc.width == texWidth && handleDesc.height == texHeight)
+                {
+                    slot = i;
+                    break;
+                }
             }
         }
         if (slot == UINT32_MAX)
@@ -271,8 +294,8 @@ bool DeviceManager_MTL::BeginFrame()
             m_SwapChainImages[slot].pTexture = pTex;
 
             nvrhi::TextureDesc texDesc;
-            texDesc.width = m_SwapChainWidth;
-            texDesc.height = m_SwapChainHeight;
+            texDesc.width = texWidth;
+            texDesc.height = texHeight;
             texDesc.format = m_DeviceParams.swapChainFormat;
             if (texDesc.format != nvrhi::Format::SRGBA8_UNORM &&
                 texDesc.format != nvrhi::Format::SBGRA8_UNORM &&
@@ -334,6 +357,66 @@ bool DeviceManager_MTL::Present()
             // Keep the present ordered after all rendering submitted so far
             // (Metal does not order command buffers on a queue by itself).
             m_NvrhiDevice->attachSubmitOrdering(pCommandBuffer);
+
+            // Smoke-test support: DUMP_PREFIX=/tmp/x [DUMP_FRAME=5] captures the
+            // frame's drawable into <prefix>_frame<N>.ppm and exits. Lets CI /
+            // scripts verify that samples actually render (not just run).
+            static const char* s_dumpPrefix = getenv("DUMP_PREFIX");
+            static int s_dumpFrameTarget = -1;
+            static int s_presentedFrames = 0;
+            const int presentFrame = s_presentedFrames++;
+            if (s_dumpPrefix && s_dumpFrameTarget < 0)
+            {
+                const char* f = getenv("DUMP_FRAME");
+                s_dumpFrameTarget = f ? atoi(f) : 5;
+            }
+
+            MTL::Buffer* pDumpBuffer = nullptr;
+            uint32_t dumpW = 0, dumpH = 0;
+            if (s_dumpPrefix && presentFrame == s_dumpFrameTarget)
+            {
+                MTL::Texture* pTex = (MTL::Texture*)[drawable texture];
+                dumpW = uint32_t(pTex->width());
+                dumpH = uint32_t(pTex->height());
+                pDumpBuffer = m_pMTLDevice->newBuffer(uint64_t(dumpW) * dumpH * 4, MTL::ResourceStorageModeShared);
+            }
+
+            if (pDumpBuffer)
+            {
+                MTL::BlitCommandEncoder* pBlit = pCommandBuffer->blitCommandEncoder();
+                MTL::Texture* pTex = (MTL::Texture*)[drawable texture];
+                pBlit->copyFromTexture(pTex, 0, 0,
+                    MTL::Origin(0, 0, 0), MTL::Size(dumpW, dumpH, 1),
+                    pDumpBuffer, 0, dumpW * 4, dumpW * 4 * dumpH);
+                pBlit->endEncoding();
+
+                pCommandBuffer->presentDrawable((MTL::Drawable*)drawable);
+                pCommandBuffer->commit();
+                pCommandBuffer->waitUntilCompleted();
+
+                const uint8_t* src = static_cast<const uint8_t*>(pDumpBuffer->contents());
+                FILE* f2 = fopen((std::string(s_dumpPrefix) + "_frame" + std::to_string(presentFrame) + ".ppm").c_str(), "wb");
+                if (f2)
+                {
+                    // drawable is BGRA8 sRGB - write RGB
+                    fprintf(f2, "P6\n%u %u\n255\n", dumpW, dumpH);
+                    std::vector<uint8_t> rowbuf(size_t(dumpW) * 3);
+                    for (uint32_t y = 0; y < dumpH; y++)
+                    {
+                        const uint8_t* row = src + uint64_t(y) * dumpW * 4;
+                        for (uint32_t x = 0; x < dumpW; x++)
+                        {
+                            rowbuf[x * 3 + 0] = row[x * 4 + 2];
+                            rowbuf[x * 3 + 1] = row[x * 4 + 1];
+                            rowbuf[x * 3 + 2] = row[x * 4 + 0];
+                        }
+                        fwrite(rowbuf.data(), 1, rowbuf.size(), f2);
+                    }
+                    fclose(f2);
+                    printf("DUMP: wrote %s_frame%d.ppm (%ux%u)\n", s_dumpPrefix, presentFrame, dumpW, dumpH);
+                }
+                exit(0);
+            }
 
             pCommandBuffer->presentDrawable((MTL::Drawable*)drawable);
             pCommandBuffer->commit();
