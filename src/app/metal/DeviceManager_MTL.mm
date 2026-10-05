@@ -295,13 +295,16 @@ bool DeviceManager_MTL::BeginFrame()
 
         // The base class builds swapchain framebuffers in BackBufferResized()
         // while the backbuffer handles are still null (they only exist after
-        // drawable acquisition, i.e. now). Rebuild once the current slot's
-        // framebuffer exists with the right size; this also runs after resizes.
-        nvrhi::IFramebuffer* pCurrentFB = GetFramebuffer(slot);
-        nvrhi::FramebufferInfoEx fbInfo = pCurrentFB
-            ? pCurrentFB->getFramebufferInfo()
-            : nvrhi::FramebufferInfoEx();
-        if (!pCurrentFB || fbInfo.width != m_SwapChainWidth || fbInfo.height != m_SwapChainHeight)
+        // drawable acquisition, i.e. now). Rebuild unless the slot's
+        // framebuffer already targets this drawable's texture. Check the
+        // colour-only framebuffer: the with-depth one reports the depth
+        // buffer's size even when its colour attachment is null or stale.
+        // A resize gives the slot a new texture, so this also covers resizes.
+        nvrhi::IFramebuffer* pCurrentFB = GetFramebuffer(slot, false);
+        const bool fbMatchesDrawable = pCurrentFB
+            && !pCurrentFB->getDesc().colorAttachments.empty()
+            && pCurrentFB->getDesc().colorAttachments[0].texture == m_SwapChainImages[slot].rhiHandle;
+        if (!fbMatchesDrawable)
         {
             BackBufferResized();
         }
