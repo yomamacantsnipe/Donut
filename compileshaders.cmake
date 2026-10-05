@@ -326,10 +326,45 @@ function(donut_compile_shaders)
         endif()
     endif()
 
-    # MSL (Metal Shading Language) compilation.
-    # ShaderMake compiles HLSL -> SPIR-V via DXC and converts to MSL in-process
-    # using spirv-cross (resource indices remapped to the nvrhi Metal convention).
-    if (params_MSL AND DONUT_WITH_METAL AND APPLE)
+    # Metal shaders. With Metal Shader Converter (nvrhi builds the
+    # nvrhi-metal-ir-convert tool when it's installed), ShaderMake compiles
+    # HLSL -> DXIL like for D3D12 and converts that to Metal shader
+    # containers. Otherwise it compiles HLSL -> SPIR-V and converts to MSL
+    # source with spirv-cross (nvrhi's fixed Metal index convention).
+    if (params_MSL AND DONUT_WITH_METAL AND APPLE AND TARGET nvrhi-metal-ir-convert)
+        if (NOT EXISTS "${SHADERMAKE_DXC_VK_PATH}")
+            message(STATUS "donut_compile_shaders: DXC (Vulkan SDK) not found, skipping Metal shader compilation")
+        else()
+            set(compilerCommandMetal ${SHADERMAKE_PATH}
+               --config ${params_CONFIG}
+               --out ${params_MSL}
+               --platform METAL
+               ${output_format_arg}
+               ${include_dirs}
+               ${ignore_includes}
+               -D TARGET_D3D12
+               -D TARGET_METAL
+               --compiler "${SHADERMAKE_DXC_VK_PATH}"
+               --metalConverter "$<TARGET_FILE:nvrhi-metal-ir-convert>"
+               --shaderModel ${params_SHADER_MODEL}
+               ${project_name_arg})
+
+            list(APPEND compilerCommandMetal ${params_SHADERMAKE_OPTIONS})
+            list(APPEND compilerCommandMetal ${params_SHADERMAKE_OPTIONS_DXIL})
+
+            if ("${params_BYPRODUCTS_MSL}" STREQUAL "")
+                add_custom_command(TARGET ${params_TARGET} PRE_BUILD COMMAND ${compilerCommandMetal})
+            else()
+                set(metal_byproducts_with_paths "")
+                foreach(relative_path IN LISTS params_BYPRODUCTS_MSL)
+                    list(APPEND metal_byproducts_with_paths "${params_MSL}/${relative_path}")
+                endforeach()
+
+                add_custom_command(TARGET ${params_TARGET} PRE_BUILD COMMAND ${compilerCommandMetal} BYPRODUCTS "${metal_byproducts_with_paths}")
+            endif()
+            add_dependencies(${params_TARGET} nvrhi-metal-ir-convert)
+        endif()
+    elseif (params_MSL AND DONUT_WITH_METAL AND APPLE)
         if (NOT EXISTS "${SHADERMAKE_DXC_VK_PATH}")
             message(STATUS "donut_compile_shaders: DXC (Vulkan SDK) not found, skipping MSL compilation")
         else()
