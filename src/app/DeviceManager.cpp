@@ -776,11 +776,28 @@ donut::app::DeviceManager::DeviceManager()
 {
 }
 
+// The framework works in pixels, as GLFW does on Windows. On macOS GLFW
+// reports window sizes and cursor positions in points; the Metal device
+// manager renders at the display's pixel resolution, so convert. (The
+// Vulkan path on macOS keeps its existing point-sized behavior.)
+static bool UsesPointCoordinates(DeviceManager* manager)
+{
+#ifdef __APPLE__
+    return manager->GetGraphicsAPI() == nvrhi::GraphicsAPI::METAL;
+#else
+    (void)manager;
+    return false;
+#endif
+}
+
 void DeviceManager::UpdateWindowSize()
 {
     int width;
     int height;
-    glfwGetWindowSize(m_Window, &width, &height);
+    if (UsesPointCoordinates(this))
+        glfwGetFramebufferSize(m_Window, &width, &height);
+    else
+        glfwGetWindowSize(m_Window, &width, &height);
 
     if (width == 0 || height == 0)
     {
@@ -938,6 +955,18 @@ void DeviceManager::KeyboardCharInput(unsigned int unicode, int mods)
 
 void DeviceManager::MousePosUpdate(double xpos, double ypos)
 {
+    if (UsesPointCoordinates(this))
+    {
+        int winWidth = 0, winHeight = 0, fbWidth = 0, fbHeight = 0;
+        glfwGetWindowSize(m_Window, &winWidth, &winHeight);
+        glfwGetFramebufferSize(m_Window, &fbWidth, &fbHeight);
+        if (winWidth > 0 && winHeight > 0)
+        {
+            xpos *= double(fbWidth) / double(winWidth);
+            ypos *= double(fbHeight) / double(winHeight);
+        }
+    }
+
     if (!m_DeviceParams.supportExplicitDisplayScaling)
     {
         xpos /= m_DPIScaleFactorX;

@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <queue>
 #include <string>
 
 #include <donut/app/DeviceManager.h>
@@ -131,6 +132,7 @@ private:
     nvrhi::metal::DeviceHandle m_NvrhiDevice;
     nvrhi::DeviceHandle m_ValidationLayer;
 
+    // Frame pacing (DeviceCreationParameters::maxFramesInFlight)
+    std::queue<nvrhi::EventQueryHandle> m_FramesInFlight;
     std::vector<nvrhi::EventQueryHandle> m_QueryPool;
-    uint32_t m_CurrentQueryIndex = 0;
 };

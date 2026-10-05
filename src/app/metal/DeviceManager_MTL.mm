@@ -26,6 +26,7 @@
 #include <nvrhi/metal.h>
 #include <nvrhi/validation.h>
 
+#include <algorithm>
 #import <Metal/Metal.hpp>
 #import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -68,6 +69,9 @@ bool DeviceManager_MTL::createDevice()
 bool DeviceManager_MTL::createSwapChain()
 {
     m_SwapChainImages.clear();
+
+    // CAMetalLayer allows 2 or 3 drawables
+    m_BackBufferCount = std::clamp(m_DeviceParams.swapChainBufferCount, 2u, 3u);
 
     if (!m_Window || !m_pMTLDevice)
         return false;
@@ -117,11 +121,12 @@ bool DeviceManager_MTL::createSwapChain()
         pLayer.framebufferOnly = getenv("DUMP_PREFIX") == nullptr;
         pLayer.frame = pView.bounds;
         pLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
-        // Render at 1x: the framework sizes window-management structures
-        // (depth buffer, viewport state) from glfwGetWindowSize, which is in
-        // points. A retina-scale drawable (bounds * backingScaleFactor) would
-        // disagree with those sizes and render into a sub-rectangle.
-        pLayer.contentsScale = 1.0;
+        // Render at the display's pixel resolution: the framework sizes the
+        // back buffer from the framebuffer size for Metal (see
+        // DeviceManager::UpdateWindowSize). A display change shows up as a
+        // framebuffer size change, which recreates the layer.
+        pLayer.contentsScale = pNSWindow.backingScaleFactor;
+        pLayer.drawableSize = CGSizeMake(fbWidth, fbHeight);
         pLayer.maximumDrawableCount = m_BackBufferCount;
         pLayer.displaySyncEnabled = m_DeviceParams.vsyncEnabled;
 
@@ -211,6 +216,9 @@ void DeviceManager_MTL::DestroyDeviceAndSwapChain()
 {
     destroySwapChain();
 
+    m_FramesInFlight = {};
+    m_QueryPool.clear();
+
     m_NvrhiDevice = nullptr;
     m_ValidationLayer = nullptr;
     m_RendererString.clear();
@@ -230,6 +238,10 @@ bool DeviceManager_MTL::BeginFrame()
     @autoreleasepool
     {
         CAMetalLayer* pLayer = (__bridge CAMetalLayer*)m_pMetalLayer;
+
+        // Vsync can change at runtime; the layer takes it without recreation
+        if (pLayer.displaySyncEnabled != m_DeviceParams.vsyncEnabled)
+            pLayer.displaySyncEnabled = m_DeviceParams.vsyncEnabled;
 
         // nextDrawable blocks until one is available (frame pacing)
         id<CAMetalDrawable> drawable = [pLayer nextDrawable];
@@ -354,9 +366,8 @@ bool DeviceManager_MTL::Present()
             id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)CFBridgingRelease(m_pCurrentDrawable);
             m_pCurrentDrawable = nullptr;
 
-            // Keep the present ordered after all rendering submitted so far
-            // (Metal does not order command buffers on a queue by itself).
-            m_NvrhiDevice->attachSubmitOrdering(pCommandBuffer);
+            // Command buffers on the graphics queue run in order, so the
+            // present follows all rendering submitted to it.
 
             // Smoke-test support: DUMP_PREFIX=/tmp/x [DUMP_FRAME=5] captures the
             // frame's drawable into <prefix>_frame<N>.ppm and exits. Lets CI /
@@ -398,7 +409,9 @@ bool DeviceManager_MTL::Present()
                 FILE* f2 = fopen((std::string(s_dumpPrefix) + "_frame" + std::to_string(presentFrame) + ".ppm").c_str(), "wb");
                 if (f2)
                 {
-                    // drawable is BGRA8 sRGB - write RGB
+                    // Write RGB from the drawable's BGRA or RGBA layout
+                    const MTL::PixelFormat dumpFormat = ((MTL::Texture*)[drawable texture])->pixelFormat();
+                    const bool bgra = dumpFormat == MTL::PixelFormatBGRA8Unorm || dumpFormat == MTL::PixelFormatBGRA8Unorm_sRGB;
                     fprintf(f2, "P6\n%u %u\n255\n", dumpW, dumpH);
                     std::vector<uint8_t> rowbuf(size_t(dumpW) * 3);
                     for (uint32_t y = 0; y < dumpH; y++)
@@ -406,9 +419,9 @@ bool DeviceManager_MTL::Present()
                         const uint8_t* row = src + uint64_t(y) * dumpW * 4;
                         for (uint32_t x = 0; x < dumpW; x++)
                         {
-                            rowbuf[x * 3 + 0] = row[x * 4 + 2];
+                            rowbuf[x * 3 + 0] = row[x * 4 + (bgra ? 2 : 0)];
                             rowbuf[x * 3 + 1] = row[x * 4 + 1];
-                            rowbuf[x * 3 + 2] = row[x * 4 + 0];
+                            rowbuf[x * 3 + 2] = row[x * 4 + (bgra ? 0 : 2)];
                         }
                         fwrite(rowbuf.data(), 1, rowbuf.size(), f2);
                     }
@@ -422,6 +435,29 @@ bool DeviceManager_MTL::Present()
             pCommandBuffer->commit();
         }
     }
+
+    // Limit the frames the CPU runs ahead, like the D3D12 and Vulkan managers
+    while (m_FramesInFlight.size() >= m_DeviceParams.maxFramesInFlight)
+    {
+        nvrhi::EventQueryHandle query = m_FramesInFlight.front();
+        m_FramesInFlight.pop();
+        m_NvrhiDevice->waitEventQuery(query);
+        m_QueryPool.push_back(query);
+    }
+
+    nvrhi::EventQueryHandle query;
+    if (!m_QueryPool.empty())
+    {
+        query = m_QueryPool.back();
+        m_QueryPool.pop_back();
+    }
+    else
+    {
+        query = m_NvrhiDevice->createEventQuery();
+    }
+    m_NvrhiDevice->resetEventQuery(query);
+    m_NvrhiDevice->setEventQuery(query, nvrhi::CommandQueue::Graphics);
+    m_FramesInFlight.push(query);
 
     return true;
 }
