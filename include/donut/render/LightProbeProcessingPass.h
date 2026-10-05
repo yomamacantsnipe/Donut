@@ -44,6 +44,7 @@ namespace donut::render
         nvrhi::DeviceHandle m_Device;
 
         nvrhi::ShaderHandle m_GeometryShader;
+        nvrhi::ShaderHandle m_LayeredVertexShader; // instead of the GS where there are none (Metal)
         nvrhi::ShaderHandle m_MipPixelShader;
         nvrhi::ShaderHandle m_DiffusePixelShader;
         nvrhi::ShaderHandle m_SpecularPixelShader;

@@ -29,6 +29,7 @@
 #if DONUT_WITH_STATIC_SHADERS
 #if DONUT_WITH_DX11
 #include "compiled_shaders/passes/light_probe_cubemap_gs.dxbc.h"
+#include "compiled_shaders/passes/light_probe_cubemap_vs.dxbc.h"
 #include "compiled_shaders/passes/light_probe_diffuse_probe_ps.dxbc.h"
 #include "compiled_shaders/passes/light_probe_environment_brdf_ps.dxbc.h"
 #include "compiled_shaders/passes/light_probe_mip_ps.dxbc.h"
@@ -36,6 +37,7 @@
 #endif
 #if DONUT_WITH_DX12
 #include "compiled_shaders/passes/light_probe_cubemap_gs.dxil.h"
+#include "compiled_shaders/passes/light_probe_cubemap_vs.dxil.h"
 #include "compiled_shaders/passes/light_probe_diffuse_probe_ps.dxil.h"
 #include "compiled_shaders/passes/light_probe_environment_brdf_ps.dxil.h"
 #include "compiled_shaders/passes/light_probe_mip_ps.dxil.h"
@@ -43,6 +45,7 @@
 #endif
 #if DONUT_WITH_VULKAN
 #include "compiled_shaders/passes/light_probe_cubemap_gs.spirv.h"
+#include "compiled_shaders/passes/light_probe_cubemap_vs.spirv.h"
 #include "compiled_shaders/passes/light_probe_diffuse_probe_ps.spirv.h"
 #include "compiled_shaders/passes/light_probe_environment_brdf_ps.spirv.h"
 #include "compiled_shaders/passes/light_probe_mip_ps.spirv.h"
@@ -68,7 +71,12 @@ LightProbeProcessingPass::LightProbeProcessingPass(
     , m_IntermediateTextureSize(intermediateTextureSize)
     , m_CommonPasses(commonPasses)
 {
-    m_GeometryShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "cubemap_gs", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_cubemap_gs), nullptr, nvrhi::ShaderType::Geometry);
+    // Metal has no geometry shaders: replicate the quad to the cube faces with
+    // instancing and layered rendering instead.
+    if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::METAL)
+        m_LayeredVertexShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "cubemap_vs", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_cubemap_vs), nullptr, nvrhi::ShaderType::Vertex);
+    else
+        m_GeometryShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "cubemap_gs", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_cubemap_gs), nullptr, nvrhi::ShaderType::Geometry);
     m_MipPixelShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "mip_ps", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_mip_ps), nullptr, nvrhi::ShaderType::Pixel);
     m_DiffusePixelShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "diffuse_probe_ps", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_diffuse_probe_ps), nullptr, nvrhi::ShaderType::Pixel);
     m_SpecularPixelShader = shaderFactory->CreateAutoShader("donut/passes/light_probe.hlsl", "specular_probe_ps", DONUT_MAKE_PLATFORM_SHADER(g_light_probe_specular_probe_ps), nullptr, nvrhi::ShaderType::Pixel);
@@ -181,7 +189,7 @@ void LightProbeProcessingPass::BlitCubemap(nvrhi::ICommandList* commandList, nvr
     if (!pso)
     {
         nvrhi::GraphicsPipelineDesc psoDesc;
-        psoDesc.VS = m_CommonPasses->m_FullscreenVS;
+        psoDesc.VS = m_LayeredVertexShader ? m_LayeredVertexShader : m_CommonPasses->m_FullscreenVS;
         psoDesc.GS = m_GeometryShader;
         psoDesc.PS = m_MipPixelShader;
         psoDesc.bindingLayouts = { m_BindingLayout };
@@ -208,7 +216,7 @@ void LightProbeProcessingPass::BlitCubemap(nvrhi::ICommandList* commandList, nvr
     commandList->setGraphicsState(state);
 
     nvrhi::DrawArguments args;
-    args.instanceCount = 1;
+    args.instanceCount = m_LayeredVertexShader ? 6 : 1;
     args.vertexCount = 4;
     commandList->draw(args);
 }
@@ -260,7 +268,7 @@ void LightProbeProcessingPass::RenderDiffuseMap(
     if (!pso)
     {
         nvrhi::GraphicsPipelineDesc psoDesc;
-        psoDesc.VS = m_CommonPasses->m_FullscreenVS;
+        psoDesc.VS = m_LayeredVertexShader ? m_LayeredVertexShader : m_CommonPasses->m_FullscreenVS;
         psoDesc.GS = m_GeometryShader;
         psoDesc.PS = m_DiffusePixelShader;
         psoDesc.bindingLayouts = { m_BindingLayout };
@@ -287,7 +295,7 @@ void LightProbeProcessingPass::RenderDiffuseMap(
     commandList->setGraphicsState(state);
 
     nvrhi::DrawArguments args;
-    args.instanceCount = 1;
+    args.instanceCount = m_LayeredVertexShader ? 6 : 1;
     args.vertexCount = 4;
     commandList->draw(args);
 
@@ -320,7 +328,7 @@ void LightProbeProcessingPass::RenderSpecularMap(nvrhi::ICommandList* commandLis
     if (!pso)
     {
         nvrhi::GraphicsPipelineDesc psoDesc;
-        psoDesc.VS = m_CommonPasses->m_FullscreenVS;
+        psoDesc.VS = m_LayeredVertexShader ? m_LayeredVertexShader : m_CommonPasses->m_FullscreenVS;
         psoDesc.GS = m_GeometryShader;
         psoDesc.PS = m_SpecularPixelShader;
         psoDesc.bindingLayouts = { m_BindingLayout };
@@ -349,7 +357,7 @@ void LightProbeProcessingPass::RenderSpecularMap(nvrhi::ICommandList* commandLis
     commandList->setGraphicsState(state);
 
     nvrhi::DrawArguments args;
-    args.instanceCount = 1;
+    args.instanceCount = m_LayeredVertexShader ? 6 : 1;
     args.vertexCount = 4;
     commandList->draw(args);
 

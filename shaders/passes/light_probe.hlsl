@@ -62,6 +62,31 @@ void cubemap_gs(
     Output.Append(OutputVertex);
 }
 
+// Without geometry shaders (Metal): a fullscreen quad per instance, the
+// instance choosing the cube face through layered rendering. Draw 4 vertices
+// as a strip, 6 instances. Only Metal writes the layer here: D3D11 can't from
+// a vertex shader, and the Vulkan build doesn't enable the SPIR-V extension.
+
+void cubemap_vs(
+    in uint iVertex : SV_VertexID,
+    in uint iInstance : SV_InstanceID,
+    out float4 o_posClip : SV_Position,
+    out float2 o_uv : UV
+#ifdef TARGET_METAL
+    , out uint o_arrayIndex : SV_RenderTargetArrayIndex
+#endif
+    )
+{
+    uint u = iVertex & 1;
+    uint v = (iVertex >> 1) & 1;
+
+    o_posClip = float4(float(u) * 2 - 1, 1 - float(v) * 2, 0, 1);
+    o_uv = float2(u, v);
+#ifdef TARGET_METAL
+    o_arrayIndex = iInstance;
+#endif
+}
+
 // Helpers
 
 float radicalInverse(uint i)
